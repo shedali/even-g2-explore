@@ -1,0 +1,25 @@
+{
+  "name": "g2-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bunx vite --host 0.0.0.0 --port 5173",
+    "sim": "bun scripts/start-sim.mjs",
+    "qr": "bunx evenhub-cli qr",
+    "build": "bunx vite build",
+    "pack": "bunx vite build && bunx evenhub-cli pack",
+    "check": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "latest",
+    "@huggingface/transformers": "^3.8.1",
+    "@jappyjan/even-better-sdk": "latest"
+  },
+  "devDependencies": {
+    "@evenrealities/evenhub-cli": "latest",
+    "@evenrealities/evenhub-simulator": "latest",
+    "typescript": "^5",
+    "vite": "^6"
+  }
+}

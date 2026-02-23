@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>G2 App</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { font-family: system-ui, sans-serif; background: #111; color: #eee; padding: 1rem; }
+      h1 { font-size: 1.2rem; margin-bottom: 0.5rem; }
+      #status { color: #888; margin-bottom: 0.25rem; }
+      #model-status { color: #68f; font-size: 0.85rem; margin-bottom: 0.75rem; }
+      #controls { margin-bottom: 1rem; }
+      #record-btn {
+        background: #333; color: #eee; border: 1px solid #555; border-radius: 6px;
+        padding: 0.5rem 1.5rem; font-size: 0.9rem; cursor: pointer;
+      }
+      #record-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+      #record-btn.recording { background: #a33; border-color: #c44; }
+      #log { font-family: monospace; font-size: 0.8rem; background: #1a1a1a; padding: 0.5rem; border-radius: 4px; max-height: 60vh; overflow-y: auto; }
+      .log-entry { padding: 2px 0; border-bottom: 1px solid #222; }
+      .log-entry.event { color: #6c6; }
+      .log-entry.error { color: #c66; }
+    </style>
+  </head>
+  <body>
+    <h1>G2 Smart Glasses</h1>
+    <div id="status">Initializing...</div>
+    <div id="model-status">Model: loading...</div>
+    <div id="controls">
+      <button id="record-btn" disabled>Record</button>
+    </div>
+    <div id="log"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
