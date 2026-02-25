@@ -15,6 +15,8 @@ function pcmS16LEtoFloat32(uint8: Uint8Array): Float32Array {
 export interface AudioCapture {
   start(): void;
   stop(): Promise<Float32Array>;
+  /** Returns the current accumulated audio buffer without stopping recording. */
+  getAudio(): Promise<Float32Array>;
 }
 
 /**
@@ -41,6 +43,10 @@ export class GlassesAudioCapture implements AudioCapture {
     this.bridge.audioControl(true);
   }
 
+  async getAudio(): Promise<Float32Array> {
+    return mergeChunks(this.chunks);
+  }
+
   async stop(): Promise<Float32Array> {
     this.recording = false;
     this.bridge.audioControl(false);
@@ -51,13 +57,17 @@ export class GlassesAudioCapture implements AudioCapture {
 }
 
 /**
- * Captures audio from the browser microphone via MediaRecorder.
- * Decodes and resamples to 16kHz mono for Whisper.
+ * Captures audio from the browser microphone via AudioContext + ScriptProcessorNode.
+ * Collects raw PCM so we can read the buffer mid-recording for streaming transcription.
+ * Resamples to 16kHz mono for Whisper.
  */
 export class BrowserAudioCapture implements AudioCapture {
   private stream: MediaStream | null = null;
-  private recorder: MediaRecorder | null = null;
-  private blobChunks: Blob[] = [];
+  private audioCtx: AudioContext | null = null;
+  private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private processorNode: ScriptProcessorNode | null = null;
+  private chunks: Float32Array[] = [];
+  private nativeSampleRate = 48000;
 
   /** Request mic permission (call once on init). */
   async init(): Promise<void> {
@@ -70,89 +80,69 @@ export class BrowserAudioCapture implements AudioCapture {
   }
 
   start() {
-    this.blobChunks = [];
-    const track = this.stream!.getAudioTracks()[0];
-    console.log("[audio] start — track state:", track.readyState);
+    this.chunks = [];
 
-    this.recorder = new MediaRecorder(this.stream!);
-    console.log("[audio] recorder mimeType:", this.recorder.mimeType);
+    // Create AudioContext inside start() — called from user gesture, avoids suspension
+    this.audioCtx = new AudioContext();
+    this.nativeSampleRate = this.audioCtx.sampleRate;
+    console.log("[audio] start — native sampleRate:", this.nativeSampleRate);
 
-    this.recorder.ondataavailable = (e) => {
-      console.log("[audio] ondataavailable size:", e.data.size);
-      if (e.data.size > 0) this.blobChunks.push(e.data);
+    this.sourceNode = this.audioCtx.createMediaStreamSource(this.stream!);
+    // bufferSize 4096 is a good balance between latency and performance
+    this.processorNode = this.audioCtx.createScriptProcessor(4096, 1, 1);
+
+    this.processorNode.onaudioprocess = (e) => {
+      const input = e.inputBuffer.getChannelData(0);
+      // Copy — the buffer is reused by the browser
+      this.chunks.push(new Float32Array(input));
     };
-    this.recorder.start();
-    console.log("[audio] recorder state:", this.recorder.state);
+
+    this.sourceNode.connect(this.processorNode);
+    // ScriptProcessorNode must be connected to destination to fire events
+    this.processorNode.connect(this.audioCtx.destination);
+
+    console.log("[audio] recording started");
   }
 
-  stop(): Promise<Float32Array> {
-    return new Promise((resolve, reject) => {
-      if (!this.recorder || this.recorder.state === "inactive") {
-        console.log("[audio] stop — recorder inactive or null");
-        reject(new Error("Not recording"));
-        return;
-      }
+  async getAudio(): Promise<Float32Array> {
+    return this.resample(mergeChunks(this.chunks));
+  }
 
-      this.recorder.onstop = async () => {
-        try {
-          console.log("[audio] onstop — chunks:", this.blobChunks.length);
-          const blob = new Blob(this.blobChunks);
-          console.log("[audio] blob size:", blob.size, "type:", blob.type);
+  async stop(): Promise<Float32Array> {
+    this.processorNode?.disconnect();
+    this.sourceNode?.disconnect();
+    this.processorNode = null;
+    this.sourceNode = null;
 
-          const arrayBuffer = await blob.arrayBuffer();
-          console.log("[audio] arrayBuffer bytes:", arrayBuffer.byteLength);
+    const audio = this.resample(mergeChunks(this.chunks));
 
-          // Decode at native sample rate, then resample
-          const audioCtx = new AudioContext();
-          console.log("[audio] decode ctx sampleRate:", audioCtx.sampleRate);
+    this.audioCtx?.close();
+    this.audioCtx = null;
 
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-          console.log(
-            "[audio] decoded — sr:",
-            audioBuffer.sampleRate,
-            "len:",
-            audioBuffer.length,
-            "dur:",
-            audioBuffer.duration,
-            "ch:",
-            audioBuffer.numberOfChannels,
-          );
-          audioCtx.close();
+    console.log("[audio] final samples:", audio.length);
+    return audio;
+  }
 
-          const raw = audioBuffer.getChannelData(0);
-
-          // Resample to 16kHz
-          const srcRate = audioBuffer.sampleRate;
-          let float32: Float32Array;
-          if (srcRate === 16000) {
-            float32 = new Float32Array(raw);
-          } else {
-            const ratio = 16000 / srcRate;
-            const outLen = Math.round(raw.length * ratio);
-            float32 = new Float32Array(outLen);
-            for (let i = 0; i < outLen; i++) {
-              const srcIdx = i / ratio;
-              const lo = Math.floor(srcIdx);
-              const hi = Math.min(lo + 1, raw.length - 1);
-              const frac = srcIdx - lo;
-              float32[i] = raw[lo] * (1 - frac) + raw[hi] * frac;
-            }
-          }
-
-          console.log("[audio] final samples:", float32.length);
-          resolve(float32);
-        } catch (err) {
-          console.error("[audio] decode error:", err);
-          reject(err);
-        }
-      };
-
-      this.recorder.stop();
-    });
+  /** Resample from native sample rate to 16kHz for Whisper. */
+  private resample(raw: Float32Array): Float32Array {
+    if (this.nativeSampleRate === 16000) return new Float32Array(raw);
+    const ratio = 16000 / this.nativeSampleRate;
+    const outLen = Math.round(raw.length * ratio);
+    const out = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const srcIdx = i / ratio;
+      const lo = Math.floor(srcIdx);
+      const hi = Math.min(lo + 1, raw.length - 1);
+      const frac = srcIdx - lo;
+      out[i] = raw[lo] * (1 - frac) + raw[hi] * frac;
+    }
+    return out;
   }
 
   dispose() {
-    this.recorder?.stop();
+    this.processorNode?.disconnect();
+    this.sourceNode?.disconnect();
+    this.audioCtx?.close();
     this.stream?.getTracks().forEach((t) => t.stop());
   }
 }

@@ -17,6 +17,7 @@ import type { WorkerResponse } from "./worker";
 const statusEl = document.getElementById("status")!;
 const modelStatusEl = document.getElementById("model-status")!;
 const recordBtn = document.getElementById("record-btn") as HTMLButtonElement;
+const transcriptEl = document.getElementById("transcript")!;
 const logEl = document.getElementById("log")!;
 
 function log(msg: string, type: "info" | "event" | "error" = "info") {
@@ -51,14 +52,24 @@ worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
     log(`Whisper model ready (${msg.device})`, "event");
     updateDisplay("Ready - tap to record");
   } else if (msg.type === "result") {
-    log(`Transcript: ${msg.text}`, "event");
+    // Intermediate streaming result — only accept if it's the latest request
+    if (msg.id != null && msg.id < latestSentId) return;
+
+    transcriptEl.textContent = msg.text;
     updateDisplay(msg.text);
-    statusEl.textContent = "Tap to record";
-    recordBtn.textContent = "Record";
+
+    // Final result (no id) — update UI to idle state
+    if (msg.id == null) {
+      log(`Transcript: ${msg.text}`, "event");
+      statusEl.textContent = "Tap to record";
+      recordBtn.textContent = "Record";
+    }
   } else if (msg.type === "error") {
     log(`Worker error: ${msg.error}`, "error");
-    statusEl.textContent = "Error - tap to retry";
-    recordBtn.textContent = "Record";
+    if (msg.id == null) {
+      statusEl.textContent = "Error - tap to retry";
+      recordBtn.textContent = "Record";
+    }
   }
 };
 
@@ -70,6 +81,12 @@ let bridge: EvenAppBridge | null = null;
 let audioCapture: AudioCapture | null = null;
 let browserCapture: BrowserAudioCapture | null = null;
 let recording = false;
+
+// Streaming transcription state
+let streamInterval: ReturnType<typeof setInterval> | null = null;
+let streamId = 0;
+let latestSentId = 0;
+const STREAM_INTERVAL_MS = 3000;
 
 // --- Display ---
 function updateDisplay(text: string) {
@@ -87,17 +104,43 @@ function updateDisplay(text: string) {
 function startRecording() {
   if (!audioCapture) return;
   recording = true;
+  streamId = 0;
+  latestSentId = 0;
+  transcriptEl.textContent = "";
   audioCapture.start();
   statusEl.textContent = "Recording...";
   recordBtn.textContent = "Stop";
   recordBtn.classList.add("recording");
   updateDisplay("Recording...");
   log("Recording started", "event");
+
+  // Start periodic streaming transcription
+  streamInterval = setInterval(async () => {
+    if (!audioCapture || !recording) return;
+    try {
+      const audio = await audioCapture.getAudio();
+      // Skip if too short for meaningful transcription
+      if (audio.length < 1600) return;
+      const id = ++streamId;
+      latestSentId = id;
+      const copy = new Float32Array(audio);
+      worker.postMessage({ type: "transcribe", audio: copy, id }, [copy.buffer]);
+    } catch (err) {
+      console.warn("[stream] interim transcription error:", err);
+    }
+  }, STREAM_INTERVAL_MS);
 }
 
 async function stopRecording() {
   if (!audioCapture || !recording) return;
   recording = false;
+
+  // Clear the streaming interval
+  if (streamInterval != null) {
+    clearInterval(streamInterval);
+    streamInterval = null;
+  }
+
   recordBtn.textContent = "...";
   recordBtn.classList.remove("recording");
   recordBtn.disabled = true;
@@ -115,9 +158,10 @@ async function stopRecording() {
       return;
     }
 
-    statusEl.textContent = "Transcribing...";
+    statusEl.textContent = "Transcribing final...";
     updateDisplay("Transcribing...");
 
+    // Final transcription — no id, so the handler knows it's final
     worker.postMessage({ type: "transcribe", audio }, [audio.buffer]);
     recordBtn.disabled = false;
   } catch (err) {

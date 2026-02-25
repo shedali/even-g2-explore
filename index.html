@@ -17,6 +17,12 @@
       }
       #record-btn:disabled { opacity: 0.4; cursor: not-allowed; }
       #record-btn.recording { background: #a33; border-color: #c44; }
+      #transcript {
+        font-size: 1.2rem; line-height: 1.5; color: #fff; background: #1a1a2a;
+        padding: 0.75rem; border-radius: 6px; margin-bottom: 0.75rem;
+        min-height: 2.5rem; white-space: pre-wrap;
+      }
+      #transcript:empty { display: none; }
       #log { font-family: monospace; font-size: 0.8rem; background: #1a1a1a; padding: 0.5rem; border-radius: 4px; max-height: 60vh; overflow-y: auto; }
       .log-entry { padding: 2px 0; border-bottom: 1px solid #222; }
       .log-entry.event { color: #6c6; }
@@ -30,6 +36,7 @@
     <div id="controls">
       <button id="record-btn" disabled>Record</button>
     </div>
+    <div id="transcript"></div>
     <div id="log"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

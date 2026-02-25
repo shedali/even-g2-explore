@@ -7,13 +7,13 @@ let transcriber: AutomaticSpeechRecognitionPipeline | null = null;
 
 export type WorkerRequest =
   | { type: "load" }
-  | { type: "transcribe"; audio: Float32Array };
+  | { type: "transcribe"; audio: Float32Array; id?: number };
 
 export type WorkerResponse =
   | { type: "progress"; status: string; file?: string; progress?: number }
   | { type: "ready"; device: string }
-  | { type: "result"; text: string }
-  | { type: "error"; error: string };
+  | { type: "result"; text: string; id?: number }
+  | { type: "error"; error: string; id?: number };
 
 async function detectDevice(): Promise<"webgpu" | "wasm"> {
   if ("gpu" in navigator) {
@@ -63,11 +63,12 @@ async function loadModel() {
   self.postMessage({ type: "ready", device } satisfies WorkerResponse);
 }
 
-async function transcribe(audio: Float32Array) {
+async function transcribe(audio: Float32Array, id?: number) {
   if (!transcriber) {
     self.postMessage({
       type: "error",
       error: "Model not loaded",
+      id,
     } satisfies WorkerResponse);
     return;
   }
@@ -77,6 +78,7 @@ async function transcribe(audio: Float32Array) {
   self.postMessage({
     type: "result",
     text: text.trim(),
+    id,
   } satisfies WorkerResponse);
 }
 
@@ -94,11 +96,12 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     }
   } else if (type === "transcribe") {
     try {
-      await transcribe(e.data.audio);
+      await transcribe(e.data.audio, e.data.id);
     } catch (err) {
       self.postMessage({
         type: "error",
         error: `Transcription failed: ${err}`,
+        id: e.data.id,
       } satisfies WorkerResponse);
     }
   }
